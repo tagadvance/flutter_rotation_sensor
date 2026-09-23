@@ -11,6 +11,9 @@ import 'rotation_sensor_web_events.dart';
 /// A web implementation of the [RotationSensorPlatform].
 class RotationSensorWebEventsW3c extends RotationSensorWebEvents {
   @override
+  String get implementationName => 'WebEventsW3c';
+
+  @override
   RotationSensorWebEventsW3c newInstance() => RotationSensorWebEventsW3c();
 
   late final JSFunction _onDataJS = onData.toJS;

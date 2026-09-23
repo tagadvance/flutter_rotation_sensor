@@ -61,6 +61,12 @@ abstract class RotationSensorPlatform extends PlatformInterface {
   /// the orientation of the device from the device's rotation sensor.
   Stream<OrientationEvent> get orientationStream;
 
+  /// A short name for this implementation, for diagnostics.
+  ///
+  /// Asked of the instance rather than matched on its type, so identifying an
+  /// implementation does not mean importing every one of them.
+  String get implementationName => 'Unknown';
+
   /// A broadcast [Stream] of [OrientationEvent]s measured from [frame],
   /// whatever [referenceFrame] is set to.
   ///

@@ -13,6 +13,9 @@ import 'rotation_sensor_web.dart';
 /// A web implementation of the [RotationSensorPlatform].
 class RotationSensorWebSensorApi extends RotationSensorWeb {
   @override
+  String get implementationName => 'WebSensorApi';
+
+  @override
   RotationSensorWebSensorApi newInstance() => RotationSensorWebSensorApi();
 
   late final JSFunction _onDataJS = _onData.toJS;
