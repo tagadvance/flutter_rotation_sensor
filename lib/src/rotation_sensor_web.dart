@@ -45,6 +45,19 @@ abstract class RotationSensorWeb extends RotationSensorPlatform {
   @override
   Stream<OrientationEvent> get orientationStream => streamController.stream;
 
+  /// Throws an [UnsupportedError]: the heading stream is not implemented on
+  /// the web yet.
+  ///
+  /// Browsers can report an absolute orientation, through the
+  /// `deviceorientationabsolute` event or an `AbsoluteOrientationSensor`, so
+  /// this is a gap rather than a limit of the platform. Serving it alongside
+  /// the main stream means a second subscription whose reference frame is
+  /// fixed, independent of the configured one.
+  @override
+  Stream<OrientationEvent> get headingStream => throw UnsupportedError(
+    'FlutterRotationSensor does not support headingStream on the web yet.',
+  );
+
   @protected
   bool get absolute => switch (referenceFrame) {
     .arbitrary || .arbitraryCorrected => false,

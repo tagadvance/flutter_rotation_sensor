@@ -9,4 +9,8 @@ void main() {
   test('orientationStream', () async {
     expect(() => platform.orientationStream.first, throwsUnsupportedError);
   });
+
+  test('headingStream', () async {
+    expect(() => platform.headingStream.first, throwsUnsupportedError);
+  });
 }

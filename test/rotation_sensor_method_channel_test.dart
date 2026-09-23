@@ -14,6 +14,7 @@ void main() {
   final platform = RotationSensorMethodChannel();
   const methodChannel = RotationSensorMethodChannel.methodChannel;
   const orientationChannel = RotationSensorMethodChannel.eventChannel;
+  const headingChannel = RotationSensorMethodChannel.headingChannel;
   late int expectedSamplingPeriod;
   late String expectedReferenceFrame;
   late List<dynamic> orientationPayload;
@@ -39,15 +40,17 @@ void main() {
               throw UnsupportedError(methodCall.method);
           }
         });
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockStreamHandler(
-          orientationChannel,
-          MockStreamHandler.inline(
-            onListen: (args, sink) {
-              sink.success(orientationPayload);
-            },
-          ),
-        );
+    for (final channel in [orientationChannel, headingChannel]) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockStreamHandler(
+            channel,
+            MockStreamHandler.inline(
+              onListen: (args, sink) {
+                sink.success(orientationPayload);
+              },
+            ),
+          );
+    }
   });
 
   tearDown(() {
@@ -56,6 +59,8 @@ void main() {
         .setMockMethodCallHandler(methodChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockStreamHandler(orientationChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(headingChannel, null);
   });
 
   test('events are logged in diagnosticMode', () async {
@@ -82,6 +87,30 @@ void main() {
       '(+0.756+0.378i+0.378j+0.378k)(+5.695±1.000)@123456789+X+Y+Z -> '
       '(+0.756+0.378i+0.378j+0.378k)(+5.695±1.000)@123456789+X+Y+Z\n',
     );
+  });
+
+  test('headingStream emits OrientationEvent', () async {
+    expect(await platform.headingStream.first, isA<OrientationEvent>());
+  });
+
+  test(
+    'headingStream is converted from X-north to Y-north on iOS even when the '
+    'reference frame is arbitrary',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      expectedReferenceFrame = 'arbitrary';
+      platform.referenceFrame = .arbitrary;
+      final event = await platform.headingStream.first;
+      expect(event.coordinateSystem, closeToMatrix3(Matrix3.rotateZ(pi / 2)));
+    },
+  );
+
+  test('arbitraryCorrected frame are unconverted on iOS', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    expectedReferenceFrame = 'arbitraryCorrected';
+    platform.referenceFrame = .arbitraryCorrected;
+    final event = await platform.orientationStream.first;
+    expect(event.coordinateSystem, closeToMatrix3(Matrix3.identity()));
   });
 
   test('orientationStream emits OrientationEvent with default sampling '

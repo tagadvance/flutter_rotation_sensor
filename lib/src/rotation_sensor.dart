@@ -47,6 +47,15 @@ class RotationSensor {
   static Stream<OrientationEvent> get orientationStream =>
       RotationSensorPlatform.instance.orientationStream;
 
+  /// A broadcast [Stream] of [OrientationEvent]s referenced to magnetic north
+  /// regardless of [referenceFrame], so an application using the
+  /// [ReferenceFrame.arbitrary] frame can still observe an absolute heading.
+  ///
+  /// Currently implemented on the Android side only; on iOS this stream emits
+  /// an error.
+  static Stream<OrientationEvent> get headingStream =>
+      RotationSensorPlatform.instance.headingStream;
+
   /// The [samplingPeriod] for the device's rotation sensor. The events may
   /// arrive at a rate faster or slower than the [samplingPeriod], which is only
   /// a hint to the system. The actual rate depends on the system's event queue

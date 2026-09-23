@@ -19,9 +19,10 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
   StreamHandler {
   private lateinit var methodChannel: MethodChannel
   private lateinit var eventChannel: EventChannel
+  private lateinit var headingChannel: EventChannel
   private lateinit var sensorManager: SensorManager
   private var eventSink: EventSink? = null
-  private var sensor: Sensor? = null
+  private var headingSink: EventSink? = null
   private var samplingPeriod = 200000
   private var sensorType = Sensor.TYPE_ROTATION_VECTOR
 
@@ -31,7 +32,7 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
     val context = flutterPluginBinding.applicationContext
     sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     setupMethodChannel(flutterPluginBinding.binaryMessenger)
-    setupEventChannel(flutterPluginBinding.binaryMessenger)
+    setupEventChannels(flutterPluginBinding.binaryMessenger)
   }
 
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -48,14 +49,29 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
     methodChannel.setMethodCallHandler(null);
   }
 
-  private fun setupEventChannel(messenger: BinaryMessenger) {
+  private fun setupEventChannels(messenger: BinaryMessenger) {
     eventChannel = EventChannel(messenger, "rotation_sensor/orientation")
     eventChannel.setStreamHandler(this)
+    headingChannel = EventChannel(messenger, "rotation_sensor/heading")
+    headingChannel.setStreamHandler(object : StreamHandler {
+      override fun onListen(arguments: Any?, events: EventSink) {
+        headingSink = events
+        syncListeners()
+      }
+
+      override fun onCancel(arguments: Any?) {
+        headingSink = null
+        syncListeners()
+      }
+    })
   }
 
   private fun teardownEventChannels() {
     eventChannel.setStreamHandler(null)
-    onCancel(null)
+    headingChannel.setStreamHandler(null)
+    eventSink = null
+    headingSink = null
+    syncListeners()
   }
 
   // === MethodCallHandler ===
@@ -91,7 +107,7 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
   private fun setSamplingPeriod(samplingPeriod: Int) {
     if (samplingPeriod == this.samplingPeriod) return
     this.samplingPeriod = samplingPeriod
-    resubscribe()
+    syncListeners()
   }
 
   private fun setReferenceFrame(referenceFrame: String) {
@@ -102,7 +118,7 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
     }
     if (sensorType == this.sensorType) return
     this.sensorType = sensorType
-    resubscribe()
+    syncListeners()
   }
 
   // === SensorEventListener ===
@@ -110,41 +126,54 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
   override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
 
   override fun onSensorChanged(event: SensorEvent) {
-    eventSink?.success(
-      arrayListOf(
-        event.values[0].toDouble(),
-        event.values[1].toDouble(),
-        event.values[2].toDouble(),
-        event.values[3].toDouble(),
-        // Estimated heading accuracy may not exist.
-        event.values.getOrElse(4, { -1.0f }).toDouble(),
-        event.timestamp,
-      )
+    val data = arrayListOf(
+      event.values[0].toDouble(),
+      event.values[1].toDouble(),
+      event.values[2].toDouble(),
+      event.values[3].toDouble(),
+      // Estimated heading accuracy may not exist.
+      event.values.getOrElse(4, { -1.0f }).toDouble(),
+      event.timestamp,
     )
+    if (event.sensor.type == sensorType) eventSink?.success(data)
+    if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) headingSink?.success(data)
   }
 
   // === StreamHandler ===
 
   override fun onListen(arguments: Any?, events: EventSink) {
     eventSink = events
-    subscribe()
+    syncListeners()
   }
 
   override fun onCancel(arguments: Any?) {
     eventSink = null
-    unsubscribe()
+    syncListeners()
   }
 
-  private fun noListeners(): Boolean = eventSink == null
+  /**
+   * Registers this listener for exactly the sensors the active sinks need.
+   * The heading channel always observes the rotation vector sensor, so when
+   * the orientation channel needs it too they share one registration.
+   */
+  private fun syncListeners() {
+    sensorManager.unregisterListener(this)
+    val sensorTypes = mutableSetOf<Int>()
+    if (eventSink != null) sensorTypes.add(sensorType)
+    if (headingSink != null) sensorTypes.add(Sensor.TYPE_ROTATION_VECTOR)
+    for (sensorType in sensorTypes) {
+      val sensor = sensorManager.getDefaultSensor(sensorType)
+      if (sensor == null) {
+        reportUnavailable(sensorType)
+        continue
+      }
+      sensorManager.registerListener(this, sensor, samplingPeriod)
+    }
+  }
 
-  private fun defaultSensor(): Sensor? {
-    val sensor = this.sensor
-    val sensorType = this.sensorType
-    if (sensor?.type == sensorType) return sensor
-    return sensorManager.getDefaultSensor(sensorType)?.also {
-      this.sensor = it
-    } ?: run {
-      eventSink?.error(
+  private fun reportUnavailable(sensorType: Int) {
+    val report = { sink: EventSink ->
+      sink.error(
         "UNAVAILABLE",
         "Sensor not found",
         "It seems that your device has no ${
@@ -155,23 +184,8 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
           }
         }."
       )
-      null
     }
-  }
-
-  private fun subscribe() {
-    defaultSensor()?.let {
-      sensorManager.registerListener(this, it, samplingPeriod)
-    }
-  }
-
-  private fun unsubscribe() {
-    sensorManager.unregisterListener(this)
-  }
-
-  private fun resubscribe() {
-    if (noListeners()) return
-    unsubscribe()
-    subscribe()
+    if (sensorType == this.sensorType) eventSink?.let(report)
+    if (sensorType == Sensor.TYPE_ROTATION_VECTOR) headingSink?.let(report)
   }
 }

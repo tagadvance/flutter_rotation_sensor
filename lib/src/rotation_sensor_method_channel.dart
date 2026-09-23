@@ -2,8 +2,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'environment.dart';
+import 'math/axis3.dart';
 import 'math/quaternion.dart';
 import 'orientation_event.dart';
+import 'rotation_sensor.dart';
 import 'rotation_sensor_platform.dart';
 
 /// An implementation of [RotationSensorPlatform] that uses method channels.
@@ -16,6 +18,11 @@ class RotationSensorMethodChannel extends RotationSensorPlatform {
   /// platform.
   @visibleForTesting
   static const eventChannel = EventChannel('rotation_sensor/orientation');
+
+  /// The event channel used to receive magnetic-north referenced orientation
+  /// events from the native platform, independent of the reference frame.
+  @visibleForTesting
+  static const headingChannel = EventChannel('rotation_sensor/heading');
 
   /// Determines whether the current platform is supported.
   static bool get isPlatformSupported =>
@@ -53,6 +60,39 @@ class RotationSensorMethodChannel extends RotationSensorPlatform {
           defaultTargetPlatform == TargetPlatform.iOS &&
           (referenceFrame == .magneticNorth || referenceFrame == .trueNorth),
     );
+  }
+
+  Stream<OrientationEvent>? _headingStream;
+
+  /// A broadcast [Stream] of [OrientationEvent]s referenced to magnetic north
+  /// regardless of [referenceFrame], so an application using the
+  /// arbitrary frame can still observe an absolute heading.
+  ///
+  /// Currently implemented on the Android side only; on iOS this stream emits
+  /// an error.
+  @override
+  Stream<OrientationEvent> get headingStream {
+    if (_headingStream != null) {
+      return _headingStream!;
+    }
+    setSamplingPeriod();
+    final broadcastStream = headingChannel.receiveBroadcastStream();
+    return _headingStream = broadcastStream.map((event) {
+      final data = event as List<dynamic>;
+      final orientationEvent = OrientationEvent(
+        quaternion: Quaternion(data[0], data[1], data[2], data[3]),
+        accuracy: data[4],
+        timestamp: data[5],
+      );
+      // Core Motion uses a world frame with X = north and Z = up. Convert it
+      // here to Y = north and Z = up to match Android and this package's
+      // convention.
+      return RotationSensor.coordinateSystem.apply(
+        defaultTargetPlatform == TargetPlatform.iOS
+            ? orientationEvent.remapCoordinateSystem(Axis3.Y, -Axis3.X)
+            : orientationEvent,
+      );
+    });
   }
 
   @override

@@ -18,4 +18,10 @@ class RotationSensorUnsupported extends RotationSensorPlatform {
       'FlutterRotationSensor does not support the $platform platform.',
     );
   }
+
+  /// Throws an [UnsupportedError] indicating that the rotation sensor is not
+  /// supported on the current platform. This getter does not return a
+  /// functional stream.
+  @override
+  Stream<OrientationEvent> get headingStream => orientationStream;
 }

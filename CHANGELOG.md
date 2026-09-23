@@ -1,3 +1,9 @@
+## [Unreleased]
+
+**Features**
+
+* Added `RotationSensor.headingStream`, a magnetic-north referenced orientation stream that is available regardless of the configured reference frame, so applications using the `arbitrary` frame can still observe an absolute heading (Android only for now)
+
 ## [0.4.0] (2026-08-27)
 
 **Features**
@@ -16,7 +22,6 @@
 
 * Corrected the orientation event values for the iOS north reference frame. (#100)
 * Fixed the azimuth value for the west direction in the README.
-
 ## [0.3.0] (2026-06-28)
 
 **Features**
