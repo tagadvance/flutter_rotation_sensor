@@ -7,6 +7,7 @@ import 'package:web/web.dart';
 
 import 'environment.dart';
 import 'orientation_event.dart';
+import 'reference_frame.dart';
 import 'rotation_sensor_platform.dart';
 import 'rotation_sensor_unsupported.dart';
 import 'rotation_sensor_web_events_w3c.dart';
@@ -45,18 +46,41 @@ abstract class RotationSensorWeb extends RotationSensorPlatform {
   @override
   Stream<OrientationEvent> get orientationStream => streamController.stream;
 
-  /// Throws an [UnsupportedError]: the heading stream is not implemented on
-  /// the web yet.
+  final Map<ReferenceFrame, RotationSensorWeb> _framed = {};
+
+  /// A broadcast [Stream] of [OrientationEvent]s measured from [frame],
+  /// whatever the configured frame is.
   ///
-  /// Browsers can report an absolute orientation, through the
-  /// `deviceorientationabsolute` event or an `AbsoluteOrientationSensor`, so
-  /// this is a gap rather than a limit of the platform. Serving it alongside
-  /// the main stream means a second subscription whose reference frame is
-  /// fixed, independent of the configured one.
+  /// Served by a second instance of this implementation with its own
+  /// [referenceFrame], rather than by teaching one instance to hold two
+  /// subscriptions. Everything a subscription needs is already instance
+  /// state here: the controller, the listener, and which event or sensor it
+  /// is attached to. A second instance is the same machinery pointed at the
+  /// other frame, and it keeps the concurrent path and the ordinary path the
+  /// same code.
+  ///
+  /// [newInstance] is what each implementation has to supply.
   @override
-  Stream<OrientationEvent> get headingStream => throw UnsupportedError(
-    'FlutterRotationSensor does not support headingStream on the web yet.',
-  );
+  Stream<OrientationEvent> orientationStreamIn(ReferenceFrame frame) {
+    if (frame == referenceFrame) {
+      return orientationStream;
+    }
+
+    return _framed
+        .putIfAbsent(
+          frame,
+          () => newInstance()
+            ..referenceFrame = frame
+            ..coordinateSystem = coordinateSystem
+            ..samplingPeriod = samplingPeriod,
+        )
+        .orientationStream;
+  }
+
+  /// Another of this implementation, for [orientationStreamIn] to point at a
+  /// second frame.
+  @protected
+  RotationSensorWeb newInstance();
 
   @protected
   bool get absolute => switch (referenceFrame) {

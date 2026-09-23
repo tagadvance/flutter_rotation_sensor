@@ -61,13 +61,11 @@ abstract class RotationSensorPlatform extends PlatformInterface {
   /// the orientation of the device from the device's rotation sensor.
   Stream<OrientationEvent> get orientationStream;
 
-  /// A broadcast [Stream] of [OrientationEvent]s referenced to magnetic north
-  /// regardless of [referenceFrame], so an application using the
-  /// [ReferenceFrame.arbitrary] frame can still observe an absolute heading.
+  /// A broadcast [Stream] of [OrientationEvent]s measured from [frame],
+  /// whatever [referenceFrame] is set to.
   ///
-  /// Currently implemented on the Android side only; on iOS this stream emits
-  /// an error.
-  Stream<OrientationEvent> get headingStream;
+  /// See `RotationSensor.orientationStreamIn`.
+  Stream<OrientationEvent> orientationStreamIn(ReferenceFrame frame);
 
   @protected
   int samplingMicroseconds = SensorInterval.normalInterval.inMicroseconds;

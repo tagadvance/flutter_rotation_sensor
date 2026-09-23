@@ -19,7 +19,8 @@ class MockRotationSensorPlatform extends RotationSensorPlatform
       ]);
 
   @override
-  Stream<OrientationEvent> get headingStream => orientationStream;
+  Stream<OrientationEvent> orientationStreamIn(ReferenceFrame frame) =>
+      orientationStream;
 }
 
 void main() {
@@ -68,11 +69,14 @@ void main() {
     );
   });
 
-  test('headingStream returns a stream of orientation events', () async {
+  test('orientationStreamIn returns a stream of orientation events', () async {
     var fakePlatform = MockRotationSensorPlatform();
     RotationSensorPlatform.instance = fakePlatform;
 
-    expect(await RotationSensor.headingStream.first, isA<OrientationEvent>());
+    expect(
+      await RotationSensor.orientationStreamIn(.magneticNorth).first,
+      isA<OrientationEvent>(),
+    );
   });
 
   test('samplingPeriod return zero duration for reserved value', () {

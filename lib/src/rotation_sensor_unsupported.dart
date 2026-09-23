@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'environment.dart';
 import 'orientation_event.dart';
+import 'reference_frame.dart';
 import 'rotation_sensor_platform.dart';
 
 /// A placeholder implementation of [RotationSensorPlatform] for unsupported
@@ -20,8 +21,9 @@ class RotationSensorUnsupported extends RotationSensorPlatform {
   }
 
   /// Throws an [UnsupportedError] indicating that the rotation sensor is not
-  /// supported on the current platform. This getter does not return a
+  /// supported on the current platform. This method does not return a
   /// functional stream.
   @override
-  Stream<OrientationEvent> get headingStream => orientationStream;
+  Stream<OrientationEvent> orientationStreamIn(ReferenceFrame frame) =>
+      orientationStream;
 }

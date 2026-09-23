@@ -47,14 +47,23 @@ class RotationSensor {
   static Stream<OrientationEvent> get orientationStream =>
       RotationSensorPlatform.instance.orientationStream;
 
-  /// A broadcast [Stream] of [OrientationEvent]s referenced to magnetic north
-  /// regardless of [referenceFrame], so an application using the
-  /// [ReferenceFrame.arbitrary] frame can still observe an absolute heading.
+  /// A broadcast [Stream] of [OrientationEvent]s measured from [frame],
+  /// whatever [referenceFrame] is set to.
   ///
-  /// Currently implemented on the Android side only; on iOS this stream emits
-  /// an error.
-  static Stream<OrientationEvent> get headingStream =>
-      RotationSensorPlatform.instance.headingStream;
+  /// [orientationStream] serves the configured frame, and configuring it is a
+  /// mode: setting [referenceFrame] reconfigures the one sensor, so a caller
+  /// can observe one frame at a time. This serves a second frame alongside it.
+  ///
+  /// The motivating case is an application driving its display from
+  /// [ReferenceFrame.arbitrary], which no magnetic disturbance can affect,
+  /// while still observing an absolute heading to know which way it is
+  /// pointing. Any pair works: the frames are independent.
+  ///
+  /// Each frame costs a sensor subscription, so listen to one only while it is
+  /// wanted. Asking for the frame [referenceFrame] is already set to still
+  /// opens a second subscription rather than sharing the first.
+  static Stream<OrientationEvent> orientationStreamIn(ReferenceFrame frame) =>
+      RotationSensorPlatform.instance.orientationStreamIn(frame);
 
   /// The [samplingPeriod] for the device's rotation sensor. The events may
   /// arrive at a rate faster or slower than the [samplingPeriod], which is only

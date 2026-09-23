@@ -2,10 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'environment.dart';
-import 'math/axis3.dart';
 import 'math/quaternion.dart';
 import 'orientation_event.dart';
-import 'rotation_sensor.dart';
+import 'reference_frame.dart';
 import 'rotation_sensor_platform.dart';
 
 /// An implementation of [RotationSensorPlatform] that uses method channels.
@@ -19,10 +18,18 @@ class RotationSensorMethodChannel extends RotationSensorPlatform {
   @visibleForTesting
   static const eventChannel = EventChannel('rotation_sensor/orientation');
 
-  /// The event channel used to receive magnetic-north referenced orientation
-  /// events from the native platform, independent of the reference frame.
+  /// The event channel serving [frame], independent of the configured one.
+  ///
+  /// A channel each rather than one carrying the frame as an argument,
+  /// because an [EventChannel] activates when its listener count goes from
+  /// zero to one and deactivates when it returns to zero: one channel is one
+  /// platform-side subscription, with its arguments fixed at the first
+  /// listen. Frames have to be concurrent, so they need a channel each, and
+  /// naming it after the frame means a frame added later needs no new
+  /// constant here.
   @visibleForTesting
-  static const headingChannel = EventChannel('rotation_sensor/heading');
+  static EventChannel channelFor(ReferenceFrame frame) =>
+      EventChannel('rotation_sensor/orientation/${frame.name}');
 
   /// Determines whether the current platform is supported.
   static bool get isPlatformSupported =>
@@ -62,38 +69,34 @@ class RotationSensorMethodChannel extends RotationSensorPlatform {
     );
   }
 
-  Stream<OrientationEvent>? _headingStream;
+  final Map<ReferenceFrame, Stream<OrientationEvent>> _framed = {};
 
-  /// A broadcast [Stream] of [OrientationEvent]s referenced to magnetic north
-  /// regardless of [referenceFrame], so an application using the
-  /// arbitrary frame can still observe an absolute heading.
+  /// A broadcast [Stream] of [OrientationEvent]s measured from [frame],
+  /// whatever the configured frame is.
   ///
-  /// Currently implemented on the Android side only; on iOS this stream emits
-  /// an error.
+  /// Cached per frame, so listening twice to the same frame shares one
+  /// subscription and two frames do not.
   @override
-  Stream<OrientationEvent> get headingStream {
-    if (_headingStream != null) {
-      return _headingStream!;
-    }
-    setSamplingPeriod();
-    final broadcastStream = headingChannel.receiveBroadcastStream();
-    return _headingStream = broadcastStream.map((event) {
-      final data = event as List<dynamic>;
-      final orientationEvent = OrientationEvent(
-        quaternion: Quaternion(data[0], data[1], data[2], data[3]),
-        accuracy: data[4],
-        timestamp: data[5],
-      );
-      // Core Motion uses a world frame with X = north and Z = up. Convert it
-      // here to Y = north and Z = up to match Android and this package's
-      // convention.
-      return RotationSensor.coordinateSystem.apply(
-        defaultTargetPlatform == TargetPlatform.iOS
-            ? orientationEvent.remapCoordinateSystem(Axis3.Y, -Axis3.X)
-            : orientationEvent,
-      );
-    });
-  }
+  Stream<OrientationEvent> orientationStreamIn(ReferenceFrame frame) =>
+      _framed.putIfAbsent(frame, () {
+        setSamplingPeriod();
+        return channelFor(frame).receiveBroadcastStream().map((event) {
+          final data = event as List<dynamic>;
+          return transform(
+            OrientationEvent(
+              quaternion: Quaternion(data[0], data[1], data[2], data[3]),
+              accuracy: data[4],
+              timestamp: data[5],
+            ),
+            // Core Motion uses a world frame with X = north and Z = up. The
+            // frame this stream serves decides that, not the configured one.
+            isXConvention:
+                defaultTargetPlatform == TargetPlatform.iOS &&
+                (frame == ReferenceFrame.magneticNorth ||
+                    frame == ReferenceFrame.trueNorth),
+          );
+        });
+      });
 
   @override
   @protected

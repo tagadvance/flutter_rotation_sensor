@@ -2,7 +2,7 @@
 
 **Features**
 
-* Added `RotationSensor.headingStream`, a magnetic-north referenced orientation stream that is available regardless of the configured reference frame, so applications using the `arbitrary` frame can still observe an absolute heading (Android only for now)
+* Added `RotationSensor.orientationStreamIn`, which serves a stream measured from a given `ReferenceFrame` whatever `referenceFrame` is set to, so more than one frame can be observed at a time. An application driving its display from `arbitrary`, which no magnetic disturbance can affect, can observe an absolute heading alongside it (Android and web; on iOS the stream reports an error)
 
 ## [0.4.0] (2026-08-27)
 

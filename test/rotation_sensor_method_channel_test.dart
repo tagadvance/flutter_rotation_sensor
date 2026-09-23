@@ -14,7 +14,13 @@ void main() {
   final platform = RotationSensorMethodChannel();
   const methodChannel = RotationSensorMethodChannel.methodChannel;
   const orientationChannel = RotationSensorMethodChannel.eventChannel;
-  const headingChannel = RotationSensorMethodChannel.headingChannel;
+  // The frame a concurrent stream is asked for, and the channel that serves
+  // it. Deliberately not the configured frame, which is what the test for
+  // the ordinary stream uses.
+  const concurrentFrame = ReferenceFrame.magneticNorth;
+  final concurrentChannel = RotationSensorMethodChannel.channelFor(
+    concurrentFrame,
+  );
   late int expectedSamplingPeriod;
   late String expectedReferenceFrame;
   late List<dynamic> orientationPayload;
@@ -40,7 +46,7 @@ void main() {
               throw UnsupportedError(methodCall.method);
           }
         });
-    for (final channel in [orientationChannel, headingChannel]) {
+    for (final channel in [orientationChannel, concurrentChannel]) {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockStreamHandler(
             channel,
@@ -60,7 +66,7 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockStreamHandler(orientationChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockStreamHandler(headingChannel, null);
+        .setMockStreamHandler(concurrentChannel, null);
   });
 
   test('events are logged in diagnosticMode', () async {
@@ -89,19 +95,54 @@ void main() {
     );
   });
 
-  test('headingStream emits OrientationEvent', () async {
-    expect(await platform.headingStream.first, isA<OrientationEvent>());
+  test('orientationStreamIn emits OrientationEvent', () async {
+    expect(
+      await platform.orientationStreamIn(concurrentFrame).first,
+      isA<OrientationEvent>(),
+    );
+  });
+
+  test('orientationStreamIn serves one channel per frame', () async {
+    // An EventChannel activates when its listener count goes from zero to
+    // one, so one channel is one platform-side subscription. Two frames at
+    // once therefore need a channel each, and the name carries the frame.
+    expect(
+      RotationSensorMethodChannel.channelFor(ReferenceFrame.magneticNorth).name,
+      'rotation_sensor/orientation/magneticNorth',
+    );
+    expect(
+      RotationSensorMethodChannel.channelFor(ReferenceFrame.arbitrary).name,
+      isNot(
+        RotationSensorMethodChannel.channelFor(ReferenceFrame.trueNorth).name,
+      ),
+    );
+  });
+
+  test('orientationStreamIn shares one subscription per frame', () async {
+    // Listening twice to the same frame must not open a second subscription,
+    // while a different frame must.
+    expect(
+      platform.orientationStreamIn(concurrentFrame),
+      same(platform.orientationStreamIn(concurrentFrame)),
+    );
   });
 
   test(
-    'headingStream is converted from X-north to Y-north on iOS even when the '
-    'reference frame is arbitrary',
+    'orientationStreamIn converts from X-north to Y-north on iOS by the frame '
+    'it serves, not the configured one',
     () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
       expectedReferenceFrame = 'arbitrary';
       platform.referenceFrame = .arbitrary;
-      final event = await platform.headingStream.first;
-      expect(event.coordinateSystem, closeToMatrix3(Matrix3.rotateZ(pi / 2)));
+      final event = await platform.orientationStreamIn(concurrentFrame).first;
+
+      // The rotation matrix, not `coordinateSystem`. The two carry different
+      // things: `coordinateSystem` records a remap of the *device* axes, and
+      // `xToYConvention` changes the *world* frame by pre-multiplying the
+      // quaternion, so it leaves `coordinateSystem` alone. Asserting there
+      // would pass whether the conversion happened or not, which is how the
+      // `isXConvention` path came to have no assertion covering it.
+      expect(event.rotationMatrix, closeToMatrix3(Matrix3.rotateZ(pi / 2)));
     },
   );
 

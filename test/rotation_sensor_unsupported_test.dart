@@ -10,7 +10,10 @@ void main() {
     expect(() => platform.orientationStream.first, throwsUnsupportedError);
   });
 
-  test('headingStream', () async {
-    expect(() => platform.headingStream.first, throwsUnsupportedError);
+  test('orientationStreamIn', () async {
+    expect(
+      () => platform.orientationStreamIn(.magneticNorth).first,
+      throwsUnsupportedError,
+    );
   });
 }

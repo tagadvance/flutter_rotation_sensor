@@ -17,12 +17,21 @@ import io.flutter.plugin.common.MethodChannel.Result
 
 class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEventListener,
   StreamHandler {
+  private companion object {
+    /** Must match the names of the ReferenceFrame enum on the Dart side. */
+    val REFERENCE_FRAMES = listOf(
+      "arbitrary", "arbitraryCorrected", "magneticNorth", "trueNorth"
+    )
+  }
+
   private lateinit var methodChannel: MethodChannel
   private lateinit var eventChannel: EventChannel
-  private lateinit var headingChannel: EventChannel
+  private lateinit var framedChannels: Map<String, EventChannel>
   private lateinit var sensorManager: SensorManager
   private var eventSink: EventSink? = null
-  private var headingSink: EventSink? = null
+
+  /** A sink per reference frame, for the streams asked for by name. */
+  private val framedSinks = mutableMapOf<String, EventSink>()
   private var samplingPeriod = 200000
   private var sensorType = Sensor.TYPE_ROTATION_VECTOR
 
@@ -49,28 +58,41 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
     methodChannel.setMethodCallHandler(null);
   }
 
+  /**
+   * The channel serving the configured frame, plus one per frame that can be
+   * asked for by name.
+   *
+   * A channel each rather than one carrying the frame as an argument, because
+   * an event channel is one subscription: it activates when its listener
+   * count goes from zero to one, with its arguments fixed at that first
+   * listen. Frames have to be observable at the same time, so they need a
+   * channel each.
+   */
   private fun setupEventChannels(messenger: BinaryMessenger) {
     eventChannel = EventChannel(messenger, "rotation_sensor/orientation")
     eventChannel.setStreamHandler(this)
-    headingChannel = EventChannel(messenger, "rotation_sensor/heading")
-    headingChannel.setStreamHandler(object : StreamHandler {
-      override fun onListen(arguments: Any?, events: EventSink) {
-        headingSink = events
-        syncListeners()
-      }
+    framedChannels = REFERENCE_FRAMES.associateWith { frame ->
+      EventChannel(messenger, "rotation_sensor/orientation/$frame").apply {
+        setStreamHandler(object : StreamHandler {
+          override fun onListen(arguments: Any?, events: EventSink) {
+            framedSinks[frame] = events
+            syncListeners()
+          }
 
-      override fun onCancel(arguments: Any?) {
-        headingSink = null
-        syncListeners()
+          override fun onCancel(arguments: Any?) {
+            framedSinks.remove(frame)
+            syncListeners()
+          }
+        })
       }
-    })
+    }
   }
 
   private fun teardownEventChannels() {
     eventChannel.setStreamHandler(null)
-    headingChannel.setStreamHandler(null)
+    framedChannels.values.forEach { it.setStreamHandler(null) }
     eventSink = null
-    headingSink = null
+    framedSinks.clear()
     syncListeners()
   }
 
@@ -111,14 +133,19 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
   }
 
   private fun setReferenceFrame(referenceFrame: String) {
-    val sensorType = when (referenceFrame) {
-      "arbitrary", "arbitraryCorrected" -> Sensor.TYPE_GAME_ROTATION_VECTOR
-      "magneticNorth", "trueNorth" -> Sensor.TYPE_ROTATION_VECTOR
-      else -> Sensor.TYPE_ROTATION_VECTOR
-    }
+    val sensorType = sensorTypeFor(referenceFrame)
     if (sensorType == this.sensorType) return
     this.sensorType = sensorType
     syncListeners()
+  }
+
+  /**
+   * Android has no separate sensor for the corrected or true-north frames, so
+   * each falls back to the one it is a refinement of, as it always has.
+   */
+  private fun sensorTypeFor(referenceFrame: String) = when (referenceFrame) {
+    "arbitrary", "arbitraryCorrected" -> Sensor.TYPE_GAME_ROTATION_VECTOR
+    else -> Sensor.TYPE_ROTATION_VECTOR
   }
 
   // === SensorEventListener ===
@@ -136,7 +163,9 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
       event.timestamp,
     )
     if (event.sensor.type == sensorType) eventSink?.success(data)
-    if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) headingSink?.success(data)
+    for ((frame, sink) in framedSinks) {
+      if (event.sensor.type == sensorTypeFor(frame)) sink.success(data)
+    }
   }
 
   // === StreamHandler ===
@@ -152,15 +181,15 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
   }
 
   /**
-   * Registers this listener for exactly the sensors the active sinks need.
-   * The heading channel always observes the rotation vector sensor, so when
-   * the orientation channel needs it too they share one registration.
+   * Registers this listener for exactly the sensors the active sinks need,
+   * and no more. Two frames backed by the same sensor share one registration,
+   * so asking for a frame the configured one already uses costs nothing.
    */
   private fun syncListeners() {
     sensorManager.unregisterListener(this)
     val sensorTypes = mutableSetOf<Int>()
     if (eventSink != null) sensorTypes.add(sensorType)
-    if (headingSink != null) sensorTypes.add(Sensor.TYPE_ROTATION_VECTOR)
+    framedSinks.keys.forEach { sensorTypes.add(sensorTypeFor(it)) }
     for (sensorType in sensorTypes) {
       val sensor = sensorManager.getDefaultSensor(sensorType)
       if (sensor == null) {
@@ -186,6 +215,8 @@ class FlutterRotationSensorPlugin : FlutterPlugin, MethodCallHandler, SensorEven
       )
     }
     if (sensorType == this.sensorType) eventSink?.let(report)
-    if (sensorType == Sensor.TYPE_ROTATION_VECTOR) headingSink?.let(report)
+    for ((frame, sink) in framedSinks) {
+      if (sensorType == sensorTypeFor(frame)) report(sink)
+    }
   }
 }
