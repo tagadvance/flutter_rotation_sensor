@@ -111,9 +111,10 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
   static func errorCode(_ error: Error) -> String {
     let nsError = error as NSError
     guard nsError.domain == CMErrorDomain else { return "UNKNOWN" }
-    switch nsError.code {
-    case Int(CMError.trueNorthNotAvailable.rawValue): return "TRUE_NORTH_UNAVAILABLE"
-    case Int(CMError.deviceRequiresMovement.rawValue): return "REQUIRES_MOVEMENT"
+    // CMError is a plain C enum, so its cases arrive as global constants.
+    switch UInt32(nsError.code) {
+    case CMErrorTrueNorthNotAvailable.rawValue: return "TRUE_NORTH_UNAVAILABLE"
+    case CMErrorDeviceRequiresMovement.rawValue: return "REQUIRES_MOVEMENT"
     default: return "UNKNOWN"
     }
   }
