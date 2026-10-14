@@ -16,9 +16,11 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
   private let motionManager: CMMotionManager
   private var eventSink: FlutterEventSink?
   private var referenceFrame: CMAttitudeReferenceFrame = .xMagneticNorthZVertical
+  private var sentErrorCodes: Set<String> = []
 
   /// A handler per reference frame, for the streams asked for by name.
   private var framedHandlers: [FramedStreamHandler] = []
+  private var framedChannels: [FlutterEventChannel] = []
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let methodChannel = FlutterMethodChannel(name: "rotation_sensor/method", binaryMessenger: registrar.messenger())
@@ -36,10 +38,11 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
     // the same time, so they need a channel each.
     for (name, frame) in referenceFrames {
       let handler = FramedStreamHandler(frame: frame)
+      let channel = FlutterEventChannel(
+        name: "rotation_sensor/orientation/\(name)", binaryMessenger: registrar.messenger())
+      channel.setStreamHandler(handler)
       instance.framedHandlers.append(handler)
-      FlutterEventChannel(
-        name: "rotation_sensor/orientation/\(name)", binaryMessenger: registrar.messenger()
-      ).setStreamHandler(handler)
+      instance.framedChannels.append(channel)
     }
   }
 
@@ -50,6 +53,14 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
 
   public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
     eventChannel.setStreamHandler(nil)
+    eventSink = nil
+    motionManager.stopDeviceMotionUpdates()
+    for channel in framedChannels {
+      channel.setStreamHandler(nil)
+    }
+    for handler in framedHandlers {
+      handler.detach()
+    }
   }
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -81,6 +92,41 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
     }
   }
 
+  /// The event shape every orientation channel shares:
+  /// [x, y, z, w, accuracy, timestamp ns]. Core Motion reports no accuracy,
+  /// so it is always -1.
+  static func rotationVector(from motion: CMDeviceMotion) -> [Any] {
+    let quaternion = motion.attitude.quaternion
+    return [
+      quaternion.x,
+      quaternion.y,
+      quaternion.z,
+      quaternion.w,
+      -1.0,
+      Int64((motion.timestamp * 1000000000).rounded())
+    ]
+  }
+
+  /// Core Motion failures worth a stable code; anything else stays UNKNOWN.
+  static func errorCode(_ error: Error) -> String {
+    let nsError = error as NSError
+    guard nsError.domain == CMErrorDomain else { return "UNKNOWN" }
+    switch nsError.code {
+    case Int(CMError.trueNorthNotAvailable.rawValue): return "TRUE_NORTH_UNAVAILABLE"
+    case Int(CMError.deviceRequiresMovement.rawValue): return "REQUIRES_MOVEMENT"
+    default: return "UNKNOWN"
+    }
+  }
+
+  /// One operation at a time: a concurrent queue can run two samples at once
+  /// and post them to the main queue out of order, handing the listener a
+  /// timestamp that goes backwards.
+  static func serialQueue() -> OperationQueue {
+    let queue = OperationQueue()
+    queue.maxConcurrentOperationCount = 1
+    return queue
+  }
+
   private func setSamplingPeriod(_ samplingPeriod: Int32) {
     guard samplingPeriod != Int32((motionManager.deviceMotionUpdateInterval * 1000000).rounded()) else { return }
     motionManager.deviceMotionUpdateInterval = Double(samplingPeriod) * 0.000001
@@ -90,13 +136,7 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
   }
 
   private func setReferenceFrame(_ referenceFrame: String) {
-    let referenceFrame: CMAttitudeReferenceFrame = switch referenceFrame {
-    case "arbitrary": .xArbitraryZVertical
-    case "arbitraryCorrected": .xArbitraryCorrectedZVertical
-    case "magneticNorth": .xMagneticNorthZVertical
-    case "trueNorth": .xTrueNorthZVertical
-    default: .xMagneticNorthZVertical
-    }
+    let referenceFrame = Self.referenceFrames[referenceFrame] ?? .xMagneticNorthZVertical
     guard referenceFrame != self.referenceFrame else { return }
     self.referenceFrame = referenceFrame
     resubscribe()
@@ -119,19 +159,17 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
   private func handleDeviceMotion(motion: CMDeviceMotion?, error: Error?) {
     guard let motion else {
       if let error {
-        eventSink?(FlutterError(code: "UNKNOWN", message: error.localizedDescription, details: nil))
+        let code = Self.errorCode(error)
+        DispatchQueue.main.async {
+          // Once per listen: a stuck source repeats its failure at the update
+          // rate, and one event already says everything the next would.
+          guard self.sentErrorCodes.insert(code).inserted else { return }
+          self.eventSink?(FlutterError(code: code, message: error.localizedDescription, details: nil))
+        }
       }
       return
     }
-    let quaternion = motion.attitude.quaternion
-    let rotationVector: [Any] = [
-      quaternion.x,
-      quaternion.y,
-      quaternion.z,
-      quaternion.w,
-      -1.0,
-      Int64((motion.timestamp * 1000000000).rounded())
-    ]
+    let rotationVector = Self.rotationVector(from: motion)
     DispatchQueue.main.async {
       self.eventSink?(rotationVector)
     }
@@ -142,7 +180,13 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
       eventSink?(FlutterError(code: "UNAVAILABLE", message: "Device motion unavailable", details: nil))
       return
     }
-    motionManager.startDeviceMotionUpdates(using: referenceFrame, to: OperationQueue(), withHandler: handleDeviceMotion)
+    guard CMMotionManager.availableAttitudeReferenceFrames().contains(referenceFrame) else {
+      eventSink?(FlutterError(code: "UNAVAILABLE", message: "Reference frame unavailable", details: nil))
+      return
+    }
+    sentErrorCodes = []
+    motionManager.startDeviceMotionUpdates(
+      using: referenceFrame, to: Self.serialQueue(), withHandler: handleDeviceMotion)
   }
 
   private func unsubscribe() {
@@ -158,45 +202,57 @@ public class FlutterRotationSensorPlugin: NSObject, FlutterPlugin, FlutterStream
 
 /// One frame's stream, backed by its own motion manager: Core Motion ties a
 /// device-motion subscription to a single reference frame, so concurrent
-/// frames need a manager each.
+/// frames need a manager each. The manager is created on first listen, so an
+/// unobserved frame never costs one.
 class FramedStreamHandler: NSObject, FlutterStreamHandler {
 
   private let frame: CMAttitudeReferenceFrame
-  private let motionManager = CMMotionManager()
+  private var motionManager: CMMotionManager?
+  private var updateInterval: TimeInterval = 0.2
   private var eventSink: FlutterEventSink?
+  private var sentErrorCodes: Set<String> = []
 
   init(frame: CMAttitudeReferenceFrame) {
     self.frame = frame
-    motionManager.deviceMotionUpdateInterval = 0.2
   }
 
   func setSamplingPeriod(_ interval: TimeInterval) {
-    motionManager.deviceMotionUpdateInterval = interval
+    updateInterval = interval
+    motionManager?.deviceMotionUpdateInterval = interval
+  }
+
+  func detach() {
+    eventSink = nil
+    motionManager?.stopDeviceMotionUpdates()
   }
 
   public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    guard CMMotionManager.availableAttitudeReferenceFrames().contains(frame) else {
+      return FlutterError(code: "UNAVAILABLE", message: "Reference frame unavailable", details: nil)
+    }
+    let motionManager = self.motionManager ?? CMMotionManager()
+    self.motionManager = motionManager
     guard motionManager.isDeviceMotionAvailable else {
       return FlutterError(code: "UNAVAILABLE", message: "Device motion unavailable", details: nil)
     }
+    motionManager.deviceMotionUpdateInterval = updateInterval
     eventSink = events
-    motionManager.startDeviceMotionUpdates(using: frame, to: OperationQueue()) { motion, error in
+    sentErrorCodes = []
+    motionManager.startDeviceMotionUpdates(
+      using: frame, to: FlutterRotationSensorPlugin.serialQueue()
+    ) { motion, error in
       guard let motion else {
         if let error {
+          let code = FlutterRotationSensorPlugin.errorCode(error)
           DispatchQueue.main.async {
-            self.eventSink?(FlutterError(code: "UNKNOWN", message: error.localizedDescription, details: nil))
+            // Once per listen: see handleDeviceMotion.
+            guard self.sentErrorCodes.insert(code).inserted else { return }
+            self.eventSink?(FlutterError(code: code, message: error.localizedDescription, details: nil))
           }
         }
         return
       }
-      let quaternion = motion.attitude.quaternion
-      let rotationVector: [Any] = [
-        quaternion.x,
-        quaternion.y,
-        quaternion.z,
-        quaternion.w,
-        -1.0,
-        Int64((motion.timestamp * 1000000000).rounded())
-      ]
+      let rotationVector = FlutterRotationSensorPlugin.rotationVector(from: motion)
       DispatchQueue.main.async {
         self.eventSink?(rotationVector)
       }
@@ -206,7 +262,8 @@ class FramedStreamHandler: NSObject, FlutterStreamHandler {
 
   public func onCancel(withArguments arguments: Any?) -> FlutterError? {
     eventSink = nil
-    motionManager.stopDeviceMotionUpdates()
+    sentErrorCodes = []
+    motionManager?.stopDeviceMotionUpdates()
     return nil
   }
 }

@@ -2,7 +2,7 @@
 
 **Features**
 
-* Added `RotationSensor.orientationStreamIn`, which serves a stream measured from a given `ReferenceFrame` whatever `referenceFrame` is set to, so more than one frame can be observed at a time. An application driving its display from `arbitrary`, which no magnetic disturbance can affect, can observe an absolute heading alongside it (Android and web; on iOS the stream reports an error)
+* Added `RotationSensor.orientationStreamIn`, which serves a stream measured from a given `ReferenceFrame` whatever `referenceFrame` is set to, so more than one frame can be observed at a time. An application driving its display from `arbitrary`, which no magnetic disturbance can affect, can observe an absolute heading alongside it (Android, iOS, and web)
 
 ## [0.4.0] (2026-08-27)
 
